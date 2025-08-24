@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ruteo Óptimo con Combustible</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    html, body { height: 100%; margin: 0; font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol'; }
+    #map { height: calc(100vh - 170px); }
+    .toolbar { padding: 10px; background: #f2f5f7; border-bottom: 1px solid #d0d7de; display:flex; align-items:center; flex-wrap: wrap; gap:8px; }
+    .toolbar input[type="number"] { 
+      margin-right: 8px; padding: 6px 8px; width:100px; border:1px solid #cbd5e1; border-radius:6px; outline:none;
+    }
+ 
+    .toolbar input[type="number"]:focus { border-color:#4f46e5; box-shadow: 0 0 0 3px rgba(79,70,229,0.15); }
+    .toolbar .control { display:inline-flex; align-items:center; gap:6px; margin-right:8px; }
+    .toolbar .control label { font-weight: 600; }
+    .toolbar .btn {
+      padding: 8px 12px; border:1px solid transparent; border-radius:8px; background: transparent; cursor:pointer; transition: all .15s ease; display:inline-flex; align-items:center; gap:8px; font-weight:600; 
+    }
+    .toolbar .btn .icon { font-size: 14px; line-height: 1; }
+    /* Hover handled per-color below to darken tone */
+    .toolbar .instructions { border:1px solid #cbd5e1; background:#ffffff; padding:6px 10px; border-radius:6px; }
+    .toolbar button.btn-green { background:transparent !important; color:#0f9d74; border-color:#0f9d74; }
+    .toolbar button.btn-green:hover { background:rgba(16,185,129,0.10) !important; }
+    .toolbar button.btn-red { background:#ef4444 !important; color:white; border-color:#dc2626; }
+    .toolbar button.btn-red:hover { background:#dc2626 !important; }
+    /* Red outlined variant for delete buttons */
+    .toolbar button.btn-red-outline { background:transparent !important; color:#dc2626; border-color:#dc2626; }
+    .toolbar button.btn-red-outline:hover { background:rgba(239,68,68,0.10) !important; }
+    .toolbar button.btn-blue { background:transparent !important; color:#2563eb; border-color:#2563eb; }
+    .toolbar button.btn-blue:hover { background:rgba(59,130,246,0.10) !important; }
+    .toolbar button.btn-yellow { background:transparent !important; color:#d97706; border-color:#d97706; }
+    .toolbar button.btn-yellow:hover { background:rgba(245,158,11,0.12) !important; color:#111827; }
+    .toolbar button:disabled { opacity: .6; cursor: not-allowed; }
+    .toolbar .btn:focus-visible { outline: 3px solid rgba(59,130,246,0.35); outline-offset: 2px; }
+    /* Toolbar rows layout */
+    .toolbar { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+    .toolbar .row { width: 100%; display: flex; justify-content: flex-start; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+    /* Legend row layout */
+    .legend-row { width:100%; display:flex; justify-content: space-between; align-items: flex-start; gap:12px; margin: 6px 0; }
+    .legend-row .instructions { border:none; background:#ffffff; padding:6px 10px; border-radius:6px; margin-right:8px; }
+    .metrics-row { width:100%; display:flex; justify-content:flex-start; align-items:center; gap:12px; margin: 4px 0 10px; font-weight:600; }
+    /* Active state highlight applied via JS */
+    .toolbar .btn.active.btn-green { background:rgba(16,185,129,0.15) !important; }
+    .toolbar .btn.active.btn-yellow { background:rgba(245,158,11,0.18) !important; }
+    .toolbar .btn.active.btn-red-outline { background:rgba(239,68,68,0.15) !important; }
+    .toolbar .btn.active.btn-blue { background:rgba(59,130,246,0.15) !important; }
+    /* Fuel group container */
+    /* Promote the route button visually */
+    .toolbar #routeBtn { background:#10b981 !important; color:white; border-color:#0f9d74; border-width:2px; box-shadow: 0 0 0 2px rgba(16,185,129,0.10); }
+    .toolbar #routeBtn:hover { background:#0ea371 !important; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); transform: translateY(-1px); }
+    .toolbar #routeBtn .label { letter-spacing: .2px; }
+    .legend { padding: 6px; }
+    .legend span { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: middle; }
+    .order-label {
+      font-weight: 700;
+      color: #000;
+      background: rgba(255,255,255,0.9);
+      border: 1px solid #333;
+      border-radius: 10px;
+      padding: 1px 6px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+    }
+
+    /* Loading overlay */
+    .loading-overlay {
+      position: fixed; inset: 0; background: rgba(255,255,255,0.6); display:none; align-items:center; justify-content:center; z-index: 9999;
+      font-weight: 600; color:#111827; backdrop-filter: blur(1px);
+    }
+    .spinner { 
+      width: 18px; height: 18px; border: 3px solid #cbd5e1; border-top-color: #4f46e5; border-radius: 50%; margin-right:10px;
+      animation: spin .8s linear infinite; display:inline-block; vertical-align: -3px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <!-- Row 2: Fuel, Tank, Consumption -->
+    <div class="row">
+      <div class="control"><label for="initialFuel" title="Cantidad de combustible disponible al inicio (en litros)">Combustible inicial (L):</label><input type="number" id="initialFuel" step="0.1" value="40" style="width:80px;"/></div>
+      <div class="control"><label for="tankCapacity" title="Capacidad total del tanque (en litros)">Capacidad del tanque (L):</label><input type="number" id="tankCapacity" step="0.1" value="40" style="width:80px;"/></div>
+      <div class="control"><label for="consumption" title="Rendimiento del vehículo (kilómetros por litro)">Consumo (km/L):</label><input type="number" id="consumption" step="0.1" value="10" style="width:80px;"/></div>
+    </div>
+
+    <!-- Row 3: Checkboxes -->
+    <div class="row">
+      <div class="control"><label for="returnToStart" title="Volver al punto inicial al finalizar la ruta">Retornar al inicio:</label><input type="checkbox" id="returnToStart" /></div>
+      <div class="control"><label for="compareAll" title="Comparar alternativas y elegir la mejor">Comparar rutas:</label><input type="checkbox" id="compareAll" /></div>
+    </div>
+
+    <!-- Row 4: Action buttons -->
+    <div class="row">
+      <button id="resetBtn" class="btn btn-red" title="Restablecer mapa y controles"><span class="icon">⟲</span><span class="label">Reset</span></button>
+      <button id="addFuelBtn" class="btn btn-yellow" title="Agregar una estación de combustible en el mapa"><span class="icon">➕⛽</span><span class="label">Combustible</span></button>
+      <button id="delFuelBtn" class="btn btn-red-outline" title="Eliminar estaciones de combustible"><span class="icon">❌⛽</span><span class="label">Combustible</span></button>
+      <button id="delDestBtn" class="btn btn-red-outline" title="Eliminar destinos del mapa"><span class="icon">❌📍</span><span class="label">Destino</span></button>
+      <button id="routeBtn" class="btn btn-green" title="Calcular la ruta óptima"><span class="icon">🧭</span><span class="label">Calcular Ruta</span></button>
+    </div>
+
+    <!-- Row 5: Save + Search (metrics moved below instructions) -->
+    <div class="row">
+      <div class="control" style="display:flex; align-items:center; gap:6px;">
+        <label for="saveName" title="Nombre para guardar esta ruta">Nombre:</label>
+        <input type="text" id="saveName" placeholder="Mi ruta" style="width:160px; padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px;"/>
+        <button id="saveBtn" class="btn btn-blue" disabled title="Calcule la ruta antes de guardar"><span class="icon">💾</span><span class="label">Guardar</span></button>
+      </div>
+      <div class="control" style="display:flex; align-items:center; gap:6px;">
+        <label for="searchSaved" title="Filtrar rutas guardadas por nombre">Buscar ruta:</label>
+        <input type="text" id="searchSaved" placeholder="Nombre..." style="width:160px; padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px;"/>
+        <button id="searchBtn" class="btn btn-blue" title="Buscar rutas guardadas"><span class="icon">🔎</span><span class="label">Buscar</span></button>
+        <select id="savedList" title="Rutas guardadas" style="padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px; min-width:220px;"></select>
+        <button id="loadBtn" class="btn btn-blue" disabled title="Cargar la ruta seleccionada"><span class="icon">📥</span><span class="label">Cargar</span></button>
+      </div>
+    </div>
+  </div>
+  <div class="legend-row">
+    <div class="legend">
+      <div><span style="background:#2e7d32"></span>Inicio</div>
+      <div><span style="background:#1565c0"></span>Destino</div>
+      <div><span style="background:#ef6c00"></span>Parada para combustible</div>
+    </div>
+    <div class="instructions">Click una vez para definir <strong>Inicio</strong>. Clicks posteriores agregan <strong>Destinos</strong></div>
+  </div>
+  <div class="metrics-row">
+    <span id="totalDistance"></span>
+    <span id="totalDuration"></span>
+    <span id="totalFuel"></span>
+  </div>
+  <div id="map"></div>
+
+  <div id="loading" class="loading-overlay">
+    <div style="background:#ffffff; border:1px solid #d1d5db; border-radius:10px; padding:14px 16px; box-shadow:0 4px 12px rgba(0,0,0,0.08); max-width:720px;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span class="spinner"></span>
+        <div style="font-size:16px; font-weight:700;">Calculando ruta óptima…</div>
+      </div>
+      <div style="margin-top:8px; color:#374151; font-size:13px; line-height:1.4;">
+        <div id="algoLine"><strong>Algoritmo:</strong> …</div>
+        <div id="heurLine"></div>
+        <div id="refuelLine">Además, se usa una <strong>heurística de repostaje</strong> (llenado codicioso según alcance y capacidad), por lo que las paradas de combustible pueden no ser globalmente óptimas.</div>
+      </div>
+    </div>
+  </div>
+  <div id="pointsTable" style="padding:10px 12px; border-top:1px solid #e5e7eb; font-size:14px;"></div>
+  <div id="comparison" style="padding:10px 12px; border-top:1px solid #e5e7eb; font-size:14px;"></div>
+  <div id="footer" style="padding:10px 12px; border-top:1px solid #e5e7eb; font-size:12px; color:#4b5563; display:flex; justify-content:space-between; align-items:center;">
+    <div>© 2025 oslianyabel</div>
+    <div>Contacto: <a href="mailto:oslianyabel@gmail.com">oslianyabel@gmail.com</a> · Licencia: <a href="https://opensource.org/licenses/MIT" target="_blank" rel="noopener noreferrer">MIT</a></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // Basic Leaflet UI without static file wiring for speed
+    const map = L.map('map').setView([23.1136, -82.3666], 12); // Havana default
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    let startMarker = null;
+    const destMarkers = [];
+    const fuelMarkers = [];
+    let routeLayer = null;
+    let warningMarker = null;
+    // Control visibility of letter labels (A, B, C...) before calculation
+    let lettersVisible = true;
+    let addFuelMode = false;
+    let delFuelMode = false;
+    let delDestMode = false;
+    // Group to hold dynamic routing artifacts (polyline, warning, auto refuel markers)
+    const routeGroup = L.layerGroup().addTo(map);
+
+    const colors = {
+      start: '#2e7d32',
+      dest: '#1565c0',
+      refuel: '#ef6c00',
+      danger: '#c62828'
+    };
+
+    function marker(latlng, color) {
+      return L.circleMarker(latlng, { radius: 8, color, fillColor: color, fillOpacity: 0.9 });
+    }
+
+    map.on('click', (e) => {
+      const { lat, lng } = e.latlng;
+      if (addFuelMode) {
+        const m = marker([lat, lng], colors.refuel).addTo(map).bindPopup('Estación definida');
+        m.on('click', () => {
+          if (delFuelMode) {
+            map.removeLayer(m);
+            const idx = fuelMarkers.indexOf(m);
+            if (idx >= 0) fuelMarkers.splice(idx, 1);
+            renderPointsTable();
+            updateLetterLabels();
+          }
+        });
+        fuelMarkers.push(m);
+        renderPointsTable();
+        updateLetterLabels();
+        return;
+      }
+      if (!startMarker) {
+        startMarker = marker([lat, lng], colors.start).addTo(map).bindPopup('Inicio');
+        renderPointsTable();
+        updateLetterLabels();
+      } else {
+        const m = marker([lat, lng], colors.dest).addTo(map).bindPopup('Destino');
+        m.on('click', () => {
+          if (delDestMode) {
+            map.removeLayer(m);
+            const idx = destMarkers.indexOf(m);
+            if (idx >= 0) destMarkers.splice(idx, 1);
+            renderPointsTable();
+            updateLetterLabels();
+          }
+        });
+        destMarkers.push(m);
+        renderPointsTable();
+        updateLetterLabels();
+      }
+    });
+
+    const loadingEl = document.getElementById('loading');
+    const routeBtn = document.getElementById('routeBtn');
+    const initialFuelInput = document.getElementById('initialFuel');
+    const tankCapacityInput = document.getElementById('tankCapacity');
+    const compareAllInput = document.getElementById('compareAll');
+    const pointsEl = document.getElementById('pointsTable');
+    const saveBtn = document.getElementById('saveBtn');
+    const saveNameInput = document.getElementById('saveName');
+    const searchSavedInput = document.getElementById('searchSaved');
+    const searchBtn = document.getElementById('searchBtn');
+    const savedList = document.getElementById('savedList');
+    const loadBtn = document.getElementById('loadBtn');
+
+    // Keep last computed plan and inputs for saving
+    let lastPlan = null;
+    function currentInputs() {
+      return {
+        start: startMarker ? [startMarker.getLatLng().lat, startMarker.getLatLng().lng] : null,
+        destinations: destMarkers.map(m => [m.getLatLng().lat, m.getLatLng().lng]),
+        user_stations: fuelMarkers.map(m => [m.getLatLng().lat, m.getLatLng().lng]),
+        initial_fuel: parseFloat(document.getElementById('initialFuel').value),
+        tank_capacity: parseFloat(document.getElementById('tankCapacity').value),
+        consumption_km_per_unit: parseFloat(document.getElementById('consumption').value),
+        return_to_start: document.getElementById('returnToStart').checked
+      };
+    }
+
+    // Saved routes: search, list and load
+    async function fetchSavedRoutes(q) {
+      const url = q ? `/api/saved?q=${encodeURIComponent(q)}` : '/api/saved';
+      const r = await fetch(url);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'No se pudo listar');
+      return j.results || [];
+    }
+
+    function fillSavedOptions(items) {
+      if (!savedList) return;
+      if (!Array.isArray(items) || items.length === 0) {
+        savedList.innerHTML = '<option value="">— sin resultados —</option>';
+        loadBtn.disabled = true;
+        return;
+      }
+      const opts = items.map(it => `<option value="${it.id}">${it.name} (${(it.total_distance_km ?? '').toString()} km)</option>`);
+      savedList.innerHTML = opts.join('');
+      // Select first by default
+      savedList.value = String(items[0].id);
+      loadBtn.disabled = false;
+    }
+
+    async function doSearch() {
+      try {
+        const q = (searchSavedInput && searchSavedInput.value.trim()) || '';
+        const items = await fetchSavedRoutes(q);
+        fillSavedOptions(items);
+      } catch (e) {
+        alert('Error al buscar: ' + e.message);
+      }
+    }
+
+    if (searchBtn) searchBtn.onclick = doSearch;
+    if (searchSavedInput) searchSavedInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+    if (savedList) savedList.addEventListener('change', () => { loadBtn.disabled = savedList.value === ''; });
+
+    async function loadSaved(id) {
+      const r = await fetch(`/api/saved/${id}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'No se pudo cargar');
+      // Reset current map state
+      reset();
+      // Place markers
+      if (j.start && j.start.length === 2) {
+        startMarker = marker([j.start[0], j.start[1]], colors.start).addTo(map).bindPopup('Inicio');
+      }
+      (j.destinations || []).forEach(p => {
+        const m = marker([p[0], p[1]], colors.dest).addTo(map).bindPopup('Destino');
+        destMarkers.push(m);
+      });
+      (j.user_stations || []).forEach(p => {
+        const m = marker([p[0], p[1]], colors.refuel).addTo(map).bindPopup('Estación definida');
+        fuelMarkers.push(m);
+      });
+      renderPointsTable();
+      lettersVisible = false; // show numbers per order
+      updateLetterLabels();
+
+      // Restore inputs
+      document.getElementById('initialFuel').value = j.initial_fuel;
+      document.getElementById('tankCapacity').value = j.tank_capacity;
+      document.getElementById('consumption').value = j.consumption_km_per_unit;
+      document.getElementById('returnToStart').checked = !!j.return_to_start;
+      syncFuelMax();
+
+      // Draw path and steps from saved plan
+      const data = j.plan || {};
+      lastPlan = data; // allow re-saving if needed
+      if (data.path && data.path.type === 'LineString' && Array.isArray(data.path.coordinates)) {
+        const coords = data.path.coordinates.map(([lng, lat]) => [lat, lng]);
+        routeLayer = L.polyline(coords, { color: '#111827', weight: 5, opacity: 0.9 }).addTo(routeGroup);
+        const bounds = L.latLngBounds(coords);
+        map.fitBounds(bounds.pad(0.1));
+      }
+      // Fuel stops from itinerary
+      (data.itinerary || []).forEach(step => {
+        if (step.type === 'refuel' && Array.isArray(step.point)) {
+          marker([step.point[0], step.point[1]], colors.refuel).addTo(routeGroup).bindPopup('Parada combustible');
+        }
+      });
+
+      // Metrics
+      const td = document.getElementById('totalDistance');
+      const tt = document.getElementById('totalDuration');
+      const tf = document.getElementById('totalFuel');
+      if (td && typeof data.total_distance_km === 'number') td.textContent = `Distancia total: ${data.total_distance_km.toFixed(2)} km`;
+      if (tt && typeof data.total_duration_s === 'number') tt.textContent = formatDuration(data.total_duration_s);
+      if (tf && typeof data.fuel_units_total === 'number') tf.textContent = `Combustible total: ${data.fuel_units_total.toFixed(2)} L`;
+
+      // Number markers per saved order
+      if (Array.isArray(data.order_indices)) {
+        let destOrder = 1;
+        data.order_indices.forEach(idx => {
+          const m = destMarkers[idx - 1];
+          if (m) {
+            const lbl = String(destOrder);
+            m.bindTooltip(lbl, { permanent: true, direction: 'top', className: 'order-label' }).openTooltip();
+            destOrder += 1;
+          }
+        });
+      }
+      // Enable save
+      if (saveBtn) saveBtn.disabled = false;
+    }
+
+    if (loadBtn) loadBtn.onclick = async () => {
+      const id = savedList && savedList.value;
+      if (!id) { alert('Seleccione una ruta.'); return; }
+      try {
+        await loadSaved(id);
+      } catch (e) {
+        alert('Error al cargar: ' + e.message);
+      }
+    };
+
+    function hasRouteArtifacts() {
+      return (routeGroup && routeGroup.getLayers && routeGroup.getLayers().length > 0) || !!routeLayer || !!warningMarker;
+    }
+    function hasAnyMarkers() {
+      return !!startMarker || destMarkers.length > 0 || fuelMarkers.length > 0;
+    }
+
+    function fmtCoord(v) { return (typeof v === 'number' && isFinite(v)) ? v.toFixed(6) : ''; }
+    function labelForIndex(i) {
+      // 0 -> A, 1 -> B, ... 25 -> Z, 26 -> AA, etc.
+      let n = i;
+      let s = '';
+      while (true) {
+        s = String.fromCharCode(65 + (n % 26)) + s;
+        n = Math.floor(n / 26) - 1;
+        if (n < 0) break;
+      }
+      return s;
+    }
+    function allPointsList() {
+      // Returns array of {marker, type: 'start'|'dest'|'fuel'} in the intended labeling order
+      const list = [];
+      if (startMarker) list.push({ marker: startMarker, type: 'start' });
+      destMarkers.forEach(m => list.push({ marker: m, type: 'dest' }));
+      fuelMarkers.forEach(m => list.push({ marker: m, type: 'fuel' }));
+      return list;
+    }
+    function clearAllTooltips() {
+      if (startMarker && startMarker.unbindTooltip) startMarker.unbindTooltip();
+      destMarkers.forEach(m => { try { m.unbindTooltip && m.unbindTooltip(); } catch(_){} });
+      fuelMarkers.forEach(m => { try { m.unbindTooltip && m.unbindTooltip(); } catch(_){} });
+    }
+    function updateLetterLabels() {
+      clearAllTooltips();
+      if (!lettersVisible) return;
+      const pts = allPointsList();
+      pts.forEach((p, idx) => {
+        const lbl = labelForIndex(idx);
+        p.marker.bindTooltip(lbl, { permanent: true, direction: 'top', className: 'order-label' }).openTooltip();
+      });
+    }
+    function renderPointsTable() {
+      if (!pointsEl) return;
+      const rows = [];
+      const pts = allPointsList();
+      pts.forEach((p, idx) => {
+        const ll = p.marker.getLatLng();
+        const lbl = labelForIndex(idx);
+        const tipo = p.type === 'start' ? 'Inicio' : (p.type === 'dest' ? 'Destino' : 'Estación');
+        rows.push(`<tr><td style="padding:4px 8px;">${lbl} - ${tipo}</td><td style="padding:4px 8px;">${fmtCoord(ll.lat)}, ${fmtCoord(ll.lng)}</td></tr>`);
+      });
+      pointsEl.innerHTML = `
+        <div style="margin-top:8px;">
+          <strong>Puntos actuales:</strong>
+          <div style="overflow:auto;">
+            <table style="border-collapse:collapse; width:100%; min-width:420px;">
+              <thead><tr><th style="text-align:left; padding:4px 8px;">Tipo</th><th style="text-align:left; padding:4px 8px;">Coordenadas (lat, lon)</th></tr></thead>
+              <tbody>${rows.join('')}</tbody>
+            </table>
+          </div>
+        </div>`;
+    }
+
+    const setLoading = (on) => {
+      if (loadingEl) loadingEl.style.display = on ? 'flex' : 'none';
+      if (routeBtn) { 
+        routeBtn.disabled = on; 
+        const lbl = routeBtn.querySelector('.label');
+        if (lbl) lbl.textContent = on ? 'Calculando…' : 'Calcular Ruta';
+      }
+      document.body.style.cursor = on ? 'progress' : 'default';
+      // Dynamic algorithm messaging while loading
+      if (on) {
+        const n = destMarkers.length;
+        const algoLine = document.getElementById('algoLine');
+        const heurLine = document.getElementById('heurLine');
+        if (algoLine && heurLine) {
+          if (n <= 8) {
+            algoLine.innerHTML = '<strong>Algoritmo:</strong> Evaluación exhaustiva de permutaciones del TSP (≈ O(n!)).';
+            heurLine.textContent = 'Para n > 8 destinos se aplica la heurística del vecino más cercano (≈ O(n^2)), que no garantiza la optimalidad.';
+          } else {
+            algoLine.innerHTML = '<strong>Algoritmo:</strong> Heurística del vecino más cercano (≈ O(n^2)).';
+            heurLine.textContent = 'Nota: la heurística NN no garantiza la ruta óptima global.';
+          }
+        }
+      }
+    };
+
+    const syncFuelMax = () => {
+      if (!initialFuelInput || !tankCapacityInput) return;
+      initialFuelInput.max = tankCapacityInput.value;
+      const cap = parseFloat(tankCapacityInput.value);
+      const init = parseFloat(initialFuelInput.value);
+      if (isFinite(cap) && isFinite(init) && init > cap) {
+        initialFuelInput.value = String(cap);
+      }
+    };
+    tankCapacityInput.addEventListener('input', syncFuelMax);
+    syncFuelMax();
+
+    function reset() {
+      if (!hasRouteArtifacts() && hasAnyMarkers()) {
+        // Full reset: no route present, but markers exist -> remove all markers and artifacts
+        if (startMarker) { map.removeLayer(startMarker); startMarker = null; }
+        destMarkers.forEach(m => { try { m.unbindTooltip && m.unbindTooltip(); } catch(e){} map.removeLayer(m); });
+        destMarkers.length = 0;
+        fuelMarkers.forEach(m => map.removeLayer(m));
+        fuelMarkers.length = 0;
+      }
+      // In all cases, clear routing artifacts and restore letter labels
+      routeGroup.clearLayers();
+      routeLayer = null;
+      warningMarker = null;
+      clearAllTooltips();
+      lettersVisible = true;
+      updateLetterLabels();
+      // Reset UI states and metrics
+      addFuelMode = false; delFuelMode = false; delDestMode = false; syncButtons();
+      const td = document.getElementById('totalDistance');
+      if (td) td.textContent = '';
+      const tt = document.getElementById('totalDuration');
+      if (tt) tt.textContent = '';
+      const comp = document.getElementById('comparison');
+      if (comp) comp.innerHTML = '';
+      const tf = document.getElementById('totalFuel');
+      if (tf) tf.textContent = '';
+      initialFuelInput.style.borderColor = '';
+      tankCapacityInput.style.borderColor = '';
+      setLoading(false);
+      renderPointsTable();
+    }
+
+    document.getElementById('resetBtn').onclick = reset;
+
+    // Toggle buttons for fuel modes
+    const addFuelBtn = document.getElementById('addFuelBtn');
+    const delFuelBtn = document.getElementById('delFuelBtn');
+    const delDestBtn = document.getElementById('delDestBtn');
+    function syncButtons() {
+      addFuelBtn.classList.toggle('active', addFuelMode);
+      delFuelBtn.classList.toggle('active', delFuelMode);
+      delDestBtn.classList.toggle('active', delDestMode);
+    }
+    addFuelBtn.onclick = () => { addFuelMode = !addFuelMode; if (addFuelMode) { delFuelMode = false; delDestMode = false; } syncButtons(); };
+    delFuelBtn.onclick = () => { delFuelMode = !delFuelMode; if (delFuelMode) { addFuelMode = false; delDestMode = false; } syncButtons(); };
+    delDestBtn.onclick = () => { delDestMode = !delDestMode; if (delDestMode) { addFuelMode = false; delFuelMode = false; } syncButtons(); };
+
+    const formatDuration = (seconds) => {
+      if (typeof seconds !== 'number' || !isFinite(seconds)) return '';
+      const s = Math.round(seconds);
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      if (h > 0) return `Tiempo estimado: ${h}h ${m.toString().padStart(2, '0')}m`;
+      return `Tiempo estimado: ${m} min`;
+    };
+
+    async function calcRoute() {
+      if (!startMarker || destMarkers.length === 0) {
+        alert('Seleccione inicio y al menos un destino.');
+        return;
+      }
+      // Validate fuel: initial <= capacity
+      const initFuel = parseFloat(initialFuelInput.value);
+      const tankCap = parseFloat(tankCapacityInput.value);
+      initialFuelInput.style.borderColor = '';
+      tankCapacityInput.style.borderColor = '';
+      if (isFinite(initFuel) && isFinite(tankCap) && initFuel > tankCap) {
+        alert('El combustible inicial no puede exceder la capacidad del tanque.');
+        initialFuelInput.style.borderColor = '#ef4444';
+        tankCapacityInput.style.borderColor = '#ef4444';
+        return;
+      }
+
+      setLoading(true);
+      const start = [startMarker.getLatLng().lat, startMarker.getLatLng().lng];
+      const destinations = destMarkers.map(m => [m.getLatLng().lat, m.getLatLng().lng]);
+      const user_stations = fuelMarkers.map(m => [m.getLatLng().lat, m.getLatLng().lng]);
+      const payload = {
+        start,
+        destinations,
+        initial_fuel: parseFloat(document.getElementById('initialFuel').value),
+        tank_capacity: parseFloat(document.getElementById('tankCapacity').value),
+        consumption_km_per_unit: parseFloat(document.getElementById('consumption').value),
+        user_stations,
+        return_to_start: document.getElementById('returnToStart').checked,
+        compare_all_orders: !!(compareAllInput && compareAllInput.checked)
+      };
+      try {
+        const resp = await fetch('/api/route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        if (!resp.ok) {
+          const t = await resp.text();
+          throw new Error('Servidor: ' + t);
+        }
+        const data = await resp.json();
+        if (!resp.ok) { throw new Error(data.error || 'Error en el cálculo'); }
+
+        // clear previous order labels
+        destMarkers.forEach(m => { try { m.unbindTooltip && m.unbindTooltip(); } catch(e){} });
+
+        if (routeLayer) { routeGroup.removeLayer(routeLayer); routeLayer = null; }
+        const geo = L.geoJSON(data.path, { style: { color: '#222', weight: 5, opacity: 0.7 } }).addTo(routeGroup);
+        routeLayer = geo;
+        map.fitBounds(geo.getBounds(), { padding: [20, 20] });
+        const td = document.getElementById('totalDistance');
+        if (td) {
+          const km = (typeof data.total_distance_km === 'number') ? data.total_distance_km : (typeof data.total_distance_m === 'number' ? data.total_distance_m/1000 : null);
+          td.textContent = (km != null) ? `Distancia total: ${km.toFixed(2)} km` : '';
+        }
+        const tt = document.getElementById('totalDuration');
+        if (tt) {
+          const secs = (typeof data.total_duration_s === 'number') ? data.total_duration_s : null;
+          tt.textContent = (secs != null) ? formatDuration(secs) : '';
+        }
+        const tf = document.getElementById('totalFuel');
+        if (tf) {
+          const fu = (typeof data.fuel_units_total === 'number') ? data.fuel_units_total : null;
+          tf.textContent = (fu != null) ? `Combustible total: ${fu.toFixed(2)} L` : '';
+        }
+
+        // Render comparison table if provided
+        const comp = document.getElementById('comparison');
+        if (comp) {
+          if (Array.isArray(data.comparison) && data.comparison.length) {
+            // Build mapping from original destination index -> numbering in optimal route (1-based)
+            const ord = Array.isArray(data.order_indices) ? data.order_indices : [];
+            const canon = new Map(); // original idx -> canonical number
+            ord.forEach((destIdx, pos) => canon.set(destIdx, pos + 1));
+
+            // Prepare items with compact canonical order string, find best by fuel then distance
+            const items = data.comparison.map(r => {
+              const mapped = Array.isArray(r.order)
+                ? r.order.map(i => canon.get(i) || i)
+                : [];
+              return {
+                ...r,
+                orderStr: mapped.join(''),
+              };
+            });
+            const best = items.reduce((a, b) =>
+              (b.fuel_units < a.fuel_units - 1e-9) || (Math.abs(b.fuel_units - a.fuel_units) < 1e-9 && b.distance_km < a.distance_km)
+                ? b : a
+            , items[0]);
+            // Sort by lowest fuel first, then by shortest distance
+            items.sort((a, b) => {
+              if (a.fuel_units !== b.fuel_units) return a.fuel_units - b.fuel_units;
+              return a.distance_km - b.distance_km;
+            });
+            const limited = items.slice(0, 15);
+            const rows = limited.map((r, idx) => {
+              const isBest = r === best;
+              const trStyle = isBest ? 'background:#fef3c7;font-weight:600;' : '';
+              const bestMark = isBest ? ' ⭐' : '';
+              const legs = Array.isArray(r.legs_km) ? r.legs_km.map(v => v.toFixed(2)).join(' + ') : '';
+              return `<tr style="${trStyle}"><td style="padding:4px 8px;">${idx+1}</td><td style="padding:4px 8px;">${r.orderStr}${bestMark}</td><td style="padding:4px 8px;">${legs}</td><td style="padding:4px 8px; text-align:right;">${r.distance_km.toFixed(2)} km</td><td style="padding:4px 8px; text-align:right;">${r.fuel_units.toFixed(2)} L</td></tr>`;
+            }).join('');
+            comp.innerHTML = `
+              <div style="margin-top:8px;">
+                <strong>Comparación por menor combustible (top ${Math.min(15, data.comparison.length)} de ${data.comparison.length} rutas):</strong>
+                <div style="overflow:auto;">
+                  <table style="border-collapse:collapse; width:100%; min-width:680px;">
+                    <thead><tr><th style="text-align:left; padding:4px 8px;">#</th><th style="text-align:left; padding:4px 8px;">Permutación</th><th style="text-align:left; padding:4px 8px;">Subtramos (km)</th><th style="text-align:right; padding:4px 8px;">Distancia</th><th style="text-align:right; padding:4px 8px;">Combustible</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                  </table>
+                </div>
+                <div style="color:#6b7280; font-size:12px; margin-top:4px;">Nota: comparación basada en distancia OSRM; ignora paradas de combustible intermedias.</div>
+              </div>`;
+          } else {
+            comp.innerHTML = '';
+          }
+        }
+
+        // Warning handling: show alert and red break point
+        if (data.warning) {
+          alert(data.warning);
+          if (Array.isArray(data.break_point) && data.break_point.length === 2) {
+            const [lat, lon] = data.break_point;
+            if (warningMarker) { routeGroup.removeLayer(warningMarker); }
+            warningMarker = L.circleMarker([lat, lon], { radius: 9, color: colors.danger, fillColor: colors.danger, fillOpacity: 0.95 }).addTo(routeGroup).bindPopup('Punto de ruptura');
+          }
+        }
+
+        // Draw refuel markers
+        data.itinerary.forEach(step => {
+          if (step.type === 'refuel') {
+            marker([step.point[0], step.point[1]], colors.refuel).addTo(routeGroup).bindPopup('Parada combustible');
+          }
+        });
+
+        // After successful calculation: enable save
+        lastPlan = data;
+        if (saveBtn) saveBtn.disabled = false;
+
+        // After successful calculation: hide letter labels so they don't interfere with optimal numbering
+        lettersVisible = false;
+        updateLetterLabels();
+        // Draw numbers on visited destinations according to order
+        let destOrder = 1;
+        if (Array.isArray(data.order_indices)) {
+          // Map destination marker order to API indices
+          data.order_indices.forEach(idx => {
+            const m = destMarkers[idx - 1];
+            if (m) {
+              m.bindTooltip(String(destOrder), {
+                permanent: true,
+                direction: 'top',
+                offset: [0, -10],
+                className: 'order-label'
+              });
+              destOrder += 1;
+            }
+          });
+        }
+      } catch (e) {
+        alert('Error: ' + e.message);
+      } finally { setLoading(false); }
+    }
+
+    document.getElementById('routeBtn').onclick = calcRoute;
+    if (saveBtn) {
+      saveBtn.onclick = async () => {
+        if (!lastPlan) { alert('Primero calcule una ruta.'); return; }
+        const name = (saveNameInput && saveNameInput.value.trim()) || '';
+        if (!name) { alert('Ingrese un nombre para guardar.'); saveNameInput && saveNameInput.focus(); return; }
+        try {
+          const inp = currentInputs();
+          const payload = {
+            name,
+            plan: lastPlan,
+            start: inp.start,
+            destinations: inp.destinations,
+            user_stations: inp.user_stations,
+            initial_fuel: inp.initial_fuel,
+            tank_capacity: inp.tank_capacity,
+            consumption_km_per_unit: inp.consumption_km_per_unit,
+            return_to_start: inp.return_to_start,
+          };
+          const r = await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+          const j = await r.json();
+          if (!r.ok || !j.ok) throw new Error(j.error || 'No se pudo guardar');
+          alert('Guardado: ' + j.name);
+        } catch (e) {
+          alert('Error al guardar: ' + e.message);
+        }
+      };
+    }
+    // Initial render
+    renderPointsTable();
+    // Auto-load saved routes list (no need to press Buscar) and select first
+    doSearch();
+  </script>
+</body>
+</html>
